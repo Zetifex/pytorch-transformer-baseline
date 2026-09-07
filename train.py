@@ -8,20 +8,21 @@ from logger import ExperimentLogger
 # 1. Setup, Configuration & Logging Pipeline
 # -----------------------------------------------------------------------------
 config = {
-    "batch_size": 16,
-    "block_size": 32,
-    "max_iters": 3000,
+    "batch_size": 64,      # Fills the GPU VRAM for smoother, accurate gradients
+    "block_size": 256,     # Expands temporal memory to track long-range context
+    "max_iters": 5000,     # Provides sufficient iterations for the deeper network to converge
     "eval_interval": 500,
-    "learning_rate": 1e-3,
-    "n_embd": 64,
-    "n_head": 4,
-    "n_layer": 4,
-    "dropout": 0.1
+    "eval_iters": 200,     # Number of batches to average for stable loss reporting
+    "learning_rate": 3e-4, # Lowered to stabilize the larger parameter updates
+    "n_embd": 384,         # Expands the representation vector resolution
+    "n_head": 6,           # Increases parallel attention subspaces
+    "n_layer": 6,          # Deepens the reasoning pathways
+    "dropout": 0.2         # Increased regularization to prevent memorization
 }
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-# Initialize the custom JSON logger
+# Initialize the custom JSON & Plot logger
 logger = ExperimentLogger(config)
 
 # -----------------------------------------------------------------------------
@@ -49,6 +50,21 @@ def get_batch(split):
     x = torch.stack([data_source[i:i+config["block_size"]] for i in ix])
     y = torch.stack([data_source[i+1:i+config["block_size"]+1] for i in ix])
     return x.to(device), y.to(device)
+
+@torch.no_grad()
+def estimate_loss(model):
+    """ Averages loss across multiple batches for a stable evaluation metric """
+    out = {}
+    model.eval() # Set model to evaluation mode (disables dropout)
+    for split in ['train', 'val']:
+        losses = torch.zeros(config["eval_iters"])
+        for k in range(config["eval_iters"]):
+            X, Y = get_batch(split)
+            logits, loss = model(X, targets=Y)
+            losses[k] = loss.item()
+        out[split] = losses.mean().item()
+    model.train() # Return to training mode
+    return out
 
 # -----------------------------------------------------------------------------
 # 3. Transformer Architecture
@@ -163,26 +179,29 @@ model = TransformerLanguageModel(
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=config["learning_rate"])
 
-# Log metadata
 param_count = sum(p.numel() for p in model.parameters())
 logger.log_model_metadata(param_count, device)
 print(f"Model parameters: {param_count/1e6:.2f} M")
 print(f"Training on {device}...")
 
 for iter in range(config["max_iters"]):
+    # Evaluate and log strictly on the interval
+    if iter % config["eval_interval"] == 0 or iter == config["max_iters"] - 1:
+        losses = estimate_loss(model)
+        print(f"Step {iter}: Train Loss {losses['train']:.4f}, Val Loss {losses['val']:.4f}")
+        logger.log_step(iter, losses['val'])
+
+    # Standard training step
     xb, yb = get_batch('train')
     logits, loss = model(xb, targets=yb)
     
     optimizer.zero_grad(set_to_none=True)
     loss.backward()
     optimizer.step()
-    
-    if iter % config["eval_interval"] == 0 or iter == config["max_iters"] - 1:
-        current_loss = loss.item()
-        print(f"Step {iter}: Loss {current_loss:.4f}")
-        # Log the step to our JSON file
-        logger.log_step(iter, current_loss)
 
 print("\n--- Final Generation Output ---")
 context = torch.zeros((1, 1), dtype=torch.long, device=device)
 print(decode(model.generate(context, max_new_tokens=400)[0].tolist()))
+
+# Generate and save the loss plot artifact
+logger.generate_plot()
