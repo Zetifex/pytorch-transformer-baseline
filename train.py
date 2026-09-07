@@ -2,20 +2,31 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 import urllib.request
+from logger import ExperimentLogger
 
 # -----------------------------------------------------------------------------
-# 1. Setup & Data Pipeline
+# 1. Setup, Configuration & Logging Pipeline
 # -----------------------------------------------------------------------------
-batch_size = 16 
-block_size = 32
-max_iters = 3000
-learning_rate = 1e-3
+config = {
+    "batch_size": 16,
+    "block_size": 32,
+    "max_iters": 3000,
+    "eval_interval": 500,
+    "learning_rate": 1e-3,
+    "n_embd": 64,
+    "n_head": 4,
+    "n_layer": 4,
+    "dropout": 0.1
+}
+
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-n_embd = 64
-n_head = 4
-n_layer = 4
-dropout = 0.1
 
+# Initialize the custom JSON logger
+logger = ExperimentLogger(config)
+
+# -----------------------------------------------------------------------------
+# 2. Data Pipeline & Tokenizer
+# -----------------------------------------------------------------------------
 print("Downloading Tiny Shakespeare dataset...")
 url = "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt"
 text = urllib.request.urlopen(url).read().decode('utf-8')
@@ -34,13 +45,13 @@ val_data = data[n:]
 
 def get_batch(split):
     data_source = train_data if split == 'train' else val_data
-    ix = torch.randint(len(data_source) - block_size, (batch_size,))
-    x = torch.stack([data_source[i:i+block_size] for i in ix])
-    y = torch.stack([data_source[i+1:i+block_size+1] for i in ix])
+    ix = torch.randint(len(data_source) - config["block_size"], (config["batch_size"],))
+    x = torch.stack([data_source[i:i+config["block_size"]] for i in ix])
+    y = torch.stack([data_source[i+1:i+config["block_size"]+1] for i in ix])
     return x.to(device), y.to(device)
 
 # -----------------------------------------------------------------------------
-# 2. Transformer Architecture
+# 3. Transformer Architecture
 # -----------------------------------------------------------------------------
 class SingleHead(nn.Module):
     def __init__(self, n_embd, head_size, block_size, dropout=0.1):
@@ -118,6 +129,7 @@ class TransformerLanguageModel(nn.Module):
         x = self.blocks(x) 
         x = self.ln_f(x) 
         logits = self.lm_head(x) 
+        
         if targets is None:
             loss = None
         else:
@@ -138,15 +150,26 @@ class TransformerLanguageModel(nn.Module):
         return idx
 
 # -----------------------------------------------------------------------------
-# 3. Execution & Inference
+# 4. Execution & Inference
 # -----------------------------------------------------------------------------
-model = TransformerLanguageModel(vocab_size, n_embd, n_head, n_layer, block_size, dropout).to(device)
-optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+model = TransformerLanguageModel(
+    vocab_size, 
+    config["n_embd"], 
+    config["n_head"], 
+    config["n_layer"], 
+    config["block_size"], 
+    config["dropout"]
+).to(device)
 
-print(f"Model parameters: {sum(p.numel() for p in model.parameters())/1e6:.2f} M")
+optimizer = torch.optim.AdamW(model.parameters(), lr=config["learning_rate"])
+
+# Log metadata
+param_count = sum(p.numel() for p in model.parameters())
+logger.log_model_metadata(param_count, device)
+print(f"Model parameters: {param_count/1e6:.2f} M")
 print(f"Training on {device}...")
 
-for iter in range(max_iters):
+for iter in range(config["max_iters"]):
     xb, yb = get_batch('train')
     logits, loss = model(xb, targets=yb)
     
@@ -154,8 +177,11 @@ for iter in range(max_iters):
     loss.backward()
     optimizer.step()
     
-    if iter % 500 == 0 or iter == max_iters - 1:
-        print(f"Step {iter}: Loss {loss.item():.4f}")
+    if iter % config["eval_interval"] == 0 or iter == config["max_iters"] - 1:
+        current_loss = loss.item()
+        print(f"Step {iter}: Loss {current_loss:.4f}")
+        # Log the step to our JSON file
+        logger.log_step(iter, current_loss)
 
 print("\n--- Final Generation Output ---")
 context = torch.zeros((1, 1), dtype=torch.long, device=device)

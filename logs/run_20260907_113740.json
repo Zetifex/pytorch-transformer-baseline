@@ -1,0 +1,46 @@
+{
+    "timestamp": "20260907_113740",
+    "hyperparameters": {
+        "batch_size": 16,
+        "block_size": 32,
+        "max_iters": 3000,
+        "eval_interval": 500,
+        "learning_rate": 0.001,
+        "n_embd": 64,
+        "n_head": 4,
+        "n_layer": 4,
+        "dropout": 0.1
+    },
+    "metrics": [
+        {
+            "step": 0,
+            "loss": 4.34679651260376
+        },
+        {
+            "step": 500,
+            "loss": 2.2955563068389893
+        },
+        {
+            "step": 1000,
+            "loss": 2.137686252593994
+        },
+        {
+            "step": 1500,
+            "loss": 2.0892632007598877
+        },
+        {
+            "step": 2000,
+            "loss": 2.087423324584961
+        },
+        {
+            "step": 2500,
+            "loss": 1.8056585788726807
+        },
+        {
+            "step": 2999,
+            "loss": 1.8617218732833862
+        }
+    ],
+    "total_parameters": 209729,
+    "device": "cuda"
+}
